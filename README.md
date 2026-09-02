@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Autonomous Research Agent
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
@@ -330,3 +331,6 @@ python -m src.evaluation.evaluator
 ## 📄 License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+=======
+# autonomous-research-agent
+>>>>>>> 99b41aec2adf1913cb4892142fad1e0440ce6aff
