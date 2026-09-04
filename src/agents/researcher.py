@@ -1,5 +1,6 @@
 """Researcher Agent responsible for executing web queries and collecting structured evidence."""
 
+import time
 from typing import List, Optional, Tuple
 from google import genai
 
@@ -75,6 +76,10 @@ class ResearcherAgent(BaseAgent):
                         continue
                     all_evidence.append(ev)
                     seen_claims.add(claim_key)
+
+                # Polite delay between searches to protect per-minute rate limits
+                if not self.mock_mode:
+                    time.sleep(2.5)
 
             except Exception as e:
                 logger.error(f"[Researcher] Failed executing query '{sq.query}': {e}")

@@ -1,12 +1,12 @@
 """Analyst Agent responsible for synthesizing evidence, identifying patterns, and structuring findings."""
 
-import json
 from typing import Any, Dict, List, Optional
 from google import genai
 from pydantic import BaseModel, Field
 
 from src.agents.base import BaseAgent
 from src.schemas.evidence import EvidenceItem, SourceMetadata
+from src.schemas.report import EntityInfo
 from src.schemas.research import ResearchPlan
 from src.utils.logging import logger
 
@@ -24,14 +24,22 @@ Ensure you extract:
 """
 
 
+class ThemeItem(BaseModel):
+    """Thematic cluster with findings and supporting facts."""
+
+    theme: str = Field(..., description="Theme title.")
+    summary: str = Field(..., description="Thematic summary.")
+    evidence_count: int = Field(default=1, description="Number of supporting evidence points.")
+
+
 class SynthesizedAnalysis(BaseModel):
-    """Pydantic model for structured analysis output."""
+    """Pydantic model for structured analysis output with concrete types."""
 
     executive_overview: str = Field(..., description="High-level synthesis of all evidence.")
-    key_themes: List[Dict[str, Any]] = Field(
+    key_themes: List[ThemeItem] = Field(
         default_factory=list, description="Thematic clusters with findings and supporting facts."
     )
-    entities_and_companies: List[Dict[str, Any]] = Field(
+    entities_and_companies: List[EntityInfo] = Field(
         default_factory=list, description="Companies, organizations, and institutions identified."
     )
     technologies_identified: List[str] = Field(
@@ -71,14 +79,14 @@ class AnalystAgent(BaseAgent):
         """Synthesize collected evidence into structured intelligence."""
         logger.info(f"[Analyst] Analyzing {len(evidence)} evidence items from {len(sources)} sources...")
 
-        if self.mock_mode or not self.client:
+        if self.mock_mode:
             return self._mock_analysis(plan, evidence)
 
         # Build evidence summary context for prompt
         evidence_text = "\n".join(
             [
                 f"- [Source: {e.source_title} ({e.source_url or 'N/A'})] {e.claim}"
-                for e in evidence[:25]  # limit to top evidence items for prompt efficiency
+                for e in evidence[:25]
             ]
         )
 
@@ -100,13 +108,13 @@ class AnalystAgent(BaseAgent):
             logger.info(f"[Analyst] Evidence synthesis completed successfully.")
             return analysis.model_dump()
         except Exception as e:
-            logger.warning(f"[Analyst] Error during synthesis: {e}. Falling back to rule-based analysis.")
-            return self._mock_analysis(plan, evidence)
+            logger.error(f"[Analyst] Real evidence synthesis failed: {e}")
+            raise RuntimeError(f"Analyst Agent failed: {str(e)}")
 
     def _mock_analysis(
         self, plan: ResearchPlan, evidence: List[EvidenceItem]
     ) -> Dict[str, Any]:
-        """Deterministic fallback analysis."""
+        """Deterministic fallback analysis for offline testing."""
         return {
             "executive_overview": (
                 f"The empirical evidence indicates significant momentum and strategic focus regarding "

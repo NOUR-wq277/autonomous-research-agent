@@ -1,7 +1,7 @@
-"""LangGraph StateGraph definition and workflow construction."""
+"""LangGraph StateGraph definition and workflow construction with streaming event support."""
 
 import time
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Callable, Dict, List, Literal, Optional
 from google import genai
 from langgraph.graph import END, START, StateGraph
 
@@ -15,6 +15,8 @@ from src.graph.state import ResearchState
 from src.schemas.research import SearchQuery
 from src.utils.logging import logger
 
+EventCallback = Callable[[str, Dict[str, Any]], None]
+
 
 class ResearchWorkflowBuilder:
     """Builder class to construct and compile the LangGraph agentic research graph."""
@@ -23,17 +25,27 @@ class ResearchWorkflowBuilder:
         self,
         client: Optional[genai.Client] = None,
         mock_mode: bool = False,
+        event_callback: Optional[EventCallback] = None,
     ):
         self.settings = get_settings()
         self.client = client
         self.mock_mode = mock_mode
+        self.event_callback = event_callback
 
-        # Initialize agents
+        # Initialize specialized agents
         self.planner = PlannerAgent(client=self.client, mock_mode=self.mock_mode)
         self.researcher = ResearcherAgent(client=self.client, mock_mode=self.mock_mode)
         self.analyst = AnalystAgent(client=self.client, mock_mode=self.mock_mode)
         self.verifier = VerifierAgent(client=self.client, mock_mode=self.mock_mode)
         self.writer = WriterAgent(client=self.client, mock_mode=self.mock_mode)
+
+    def _emit(self, event_type: str, data: Dict[str, Any]) -> None:
+        """Emit real-time status event if callback is registered."""
+        if self.event_callback:
+            try:
+                self.event_callback(event_type, data)
+            except Exception as e:
+                logger.debug(f"[EventCallback] Error in event callback: {e}")
 
     # --------------------------------------------------------
     # Node 1: Planner
@@ -42,23 +54,34 @@ class ResearchWorkflowBuilder:
         """Node that produces the structured research plan and initial queries."""
         logger.info(">>> [Workflow] Executing Planner Node")
         question = state["question"]
+        self._emit("planner_started", {"question": question})
+
         try:
             plan = self.planner.plan(question)
+            selected_queries = plan.search_queries[: self.settings.max_search_queries]
+            self._emit(
+                "planner_completed",
+                {
+                    "objective": plan.research_objective,
+                    "subquestions": [sq.question for sq in plan.subquestions],
+                    "search_queries": [q.query for q in selected_queries],
+                    "target_domains": plan.target_domains,
+                },
+            )
             return {
                 "plan": plan,
-                "search_queries": plan.search_queries[: self.settings.max_search_queries],
+                "search_queries": selected_queries,
             }
         except Exception as e:
             logger.error(f"[Workflow] Error in planner_node: {e}")
-            return {
-                "errors": state.get("errors", []) + [f"Planner error: {e}"],
-            }
+            self._emit("planner_failed", {"error": str(e)})
+            raise
 
     # --------------------------------------------------------
     # Node 2: Researcher
     # --------------------------------------------------------
     def researcher_node(self, state: ResearchState) -> Dict[str, Any]:
-        """Node that executes web research using current search queries."""
+        """Node that executes real web research using current search queries."""
         iteration = state.get("iteration", 0) + 1
         logger.info(f">>> [Workflow] Executing Researcher Node (Iteration {iteration})")
 
@@ -66,11 +89,32 @@ class ResearchWorkflowBuilder:
         existing_sources = state.get("sources", [])
         existing_evidence = state.get("evidence", [])
 
+        self._emit(
+            "researcher_started",
+            {
+                "iteration": iteration,
+                "queries_count": len(queries),
+                "queries": [q.query for q in queries],
+            },
+        )
+
         try:
             sources, evidence = self.researcher.execute_research(
                 queries=queries,
                 existing_sources=existing_sources,
                 existing_evidence=existing_evidence,
+            )
+            self._emit(
+                "researcher_completed",
+                {
+                    "iteration": iteration,
+                    "total_sources": len(sources),
+                    "total_evidence": len(evidence),
+                    "sources": [
+                        {"title": s.title, "url": s.url, "domain": s.domain, "reliability": s.reliability_score}
+                        for s in sources
+                    ],
+                },
             )
             return {
                 "iteration": iteration,
@@ -79,10 +123,8 @@ class ResearchWorkflowBuilder:
             }
         except Exception as e:
             logger.error(f"[Workflow] Error in researcher_node: {e}")
-            return {
-                "iteration": iteration,
-                "errors": state.get("errors", []) + [f"Researcher error: {e}"],
-            }
+            self._emit("researcher_failed", {"error": str(e)})
+            raise
 
     # --------------------------------------------------------
     # Node 3: Analyst
@@ -94,18 +136,33 @@ class ResearchWorkflowBuilder:
         evidence = state.get("evidence", [])
         sources = state.get("sources", [])
 
+        self._emit(
+            "analyst_started",
+            {"evidence_count": len(evidence), "sources_count": len(sources)},
+        )
+
         try:
             analysis = self.analyst.analyze(
                 plan=plan,
                 evidence=evidence,
                 sources=sources,
             )
+            self._emit(
+                "analyst_completed",
+                {
+                    "overview": analysis.get("executive_overview", ""),
+                    "entities": analysis.get("entities_and_companies", []),
+                    "technologies": analysis.get("technologies_identified", []),
+                    "opportunities": analysis.get("strategic_opportunities", []),
+                    "risks": analysis.get("risks_and_challenges", []),
+                    "market_trends": analysis.get("market_trends", []),
+                },
+            )
             return {"analysis": analysis}
         except Exception as e:
             logger.error(f"[Workflow] Error in analyst_node: {e}")
-            return {
-                "errors": state.get("errors", []) + [f"Analyst error: {e}"],
-            }
+            self._emit("analyst_failed", {"error": str(e)})
+            raise
 
     # --------------------------------------------------------
     # Node 4: Verifier
@@ -120,6 +177,11 @@ class ResearchWorkflowBuilder:
         analysis = state.get("analysis", {})
         iteration = state.get("iteration", 1)
         max_iterations = state.get("max_iterations", self.settings.max_research_iterations)
+
+        self._emit(
+            "verifier_started",
+            {"iteration": iteration, "max_iterations": max_iterations},
+        )
 
         try:
             verification = self.verifier.verify(
@@ -146,6 +208,17 @@ class ResearchWorkflowBuilder:
                     for topic in verification.missing_topics[: self.settings.max_search_queries]
                 ]
 
+            self._emit(
+                "verifier_completed",
+                {
+                    "is_sufficient": verification.is_sufficient,
+                    "confidence": verification.confidence,
+                    "reason": verification.reason,
+                    "missing_topics": verification.missing_topics,
+                    "next_queries": [q.query for q in next_queries],
+                },
+            )
+
             return {
                 "verification": verification,
                 "missing_topics": verification.missing_topics,
@@ -153,9 +226,8 @@ class ResearchWorkflowBuilder:
             }
         except Exception as e:
             logger.error(f"[Workflow] Error in verifier_node: {e}")
-            return {
-                "errors": state.get("errors", []) + [f"Verifier error: {e}"],
-            }
+            self._emit("verifier_failed", {"error": str(e)})
+            raise
 
     # --------------------------------------------------------
     # Node 5: Writer
@@ -169,6 +241,8 @@ class ResearchWorkflowBuilder:
         evidence = state.get("evidence", [])
         analysis = state.get("analysis", {})
 
+        self._emit("writer_started", {"sources_count": len(sources), "evidence_count": len(evidence)})
+
         try:
             final_report = self.writer.write_report(
                 question=question,
@@ -177,12 +251,19 @@ class ResearchWorkflowBuilder:
                 evidence=evidence,
                 analysis=analysis,
             )
+            self._emit(
+                "writer_completed",
+                {
+                    "title": final_report.title,
+                    "sections_count": len(final_report.sections),
+                    "key_findings": final_report.key_findings,
+                },
+            )
             return {"final_report": final_report}
         except Exception as e:
             logger.error(f"[Workflow] Error in writer_node: {e}")
-            return {
-                "errors": state.get("errors", []) + [f"Writer error: {e}"],
-            }
+            self._emit("writer_failed", {"error": str(e)})
+            raise
 
     # --------------------------------------------------------
     # Conditional Edge Router
@@ -203,6 +284,15 @@ class ResearchWorkflowBuilder:
             logger.info(
                 f"[Router] Evidence insufficient ({verification.reason[:60]}...). "
                 f"Looping back to Researcher (Iteration {iteration + 1}/{max_iterations})."
+            )
+            self._emit(
+                "loopback_triggered",
+                {
+                    "next_iteration": iteration + 1,
+                    "max_iterations": max_iterations,
+                    "reason": verification.reason,
+                    "missing_topics": verification.missing_topics,
+                },
             )
             return "researcher"
 
@@ -250,7 +340,12 @@ class ResearchWorkflowBuilder:
 def create_research_graph(
     client: Optional[genai.Client] = None,
     mock_mode: bool = False,
+    event_callback: Optional[EventCallback] = None,
 ):
     """Factory helper to build and compile the research workflow graph."""
-    builder = ResearchWorkflowBuilder(client=client, mock_mode=mock_mode)
+    builder = ResearchWorkflowBuilder(
+        client=client,
+        mock_mode=mock_mode,
+        event_callback=event_callback,
+    )
     return builder.build_graph()

@@ -25,12 +25,12 @@ class Settings(BaseSettings):
 
     # Model Configuration
     gemini_model: str = Field(
-        default="gemini-3.5-flash-lite",
+        default="gemini-2.5-flash",
         alias="GEMINI_MODEL",
         description="Primary model for planning, research synthesis, and writing.",
     )
     fallback_models_str: str = Field(
-        default="gemini-3.6-flash,gemini-flash-latest,gemini-2.5-flash",
+        default="gemini-3.6-flash,gemini-flash-latest,gemini-3.5-flash-lite",
         alias="FALLBACK_MODELS",
         description="Comma-separated fallback model names.",
     )

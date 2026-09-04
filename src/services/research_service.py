@@ -1,7 +1,10 @@
-"""High-level orchestration service for executing end-to-end research workflows."""
+"""High-level orchestration service for executing end-to-end research workflows with streaming support."""
 
+import json
+import queue
+import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Generator, Optional
 from google import genai
 
 from src.config.settings import get_settings
@@ -21,12 +24,12 @@ class ResearchService:
         self.settings = get_settings()
         self.client = client
         self.mock_mode = mock_mode
-        self.graph = create_research_graph(client=self.client, mock_mode=self.mock_mode)
 
     def run_research(
         self,
         question: str,
         max_iterations: Optional[int] = None,
+        event_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None,
     ) -> ResearchResponse:
         """Execute the full agentic research graph for a user question."""
         start_time = time.time()
@@ -34,7 +37,12 @@ class ResearchService:
 
         limit_iterations = max_iterations or self.settings.max_research_iterations
 
-        # Initialize workflow state
+        graph = create_research_graph(
+            client=self.client,
+            mock_mode=self.mock_mode,
+            event_callback=event_callback,
+        )
+
         initial_state = {
             "question": question,
             "iteration": 0,
@@ -54,8 +62,7 @@ class ResearchService:
             },
         }
 
-        # Invoke LangGraph state machine
-        final_state = self.graph.invoke(initial_state)
+        final_state = graph.invoke(initial_state)
 
         duration = round(time.time() - start_time, 2)
         sources = final_state.get("sources", [])
@@ -89,3 +96,55 @@ class ResearchService:
         )
 
         return response
+
+    def stream_research(
+        self,
+        question: str,
+        max_iterations: Optional[int] = None,
+    ) -> Generator[str, None, None]:
+        """Generator yielding Server-Sent Events (SSE) representing real-time research progress."""
+        event_q: queue.Queue = queue.Queue()
+
+        def callback(event_type: str, data: Dict[str, Any]):
+            event_q.put({"event": event_type, "data": data, "timestamp": time.time()})
+
+        result_container: Dict[str, Any] = {}
+
+        def worker():
+            try:
+                res = self.run_research(
+                    question=question,
+                    max_iterations=max_iterations,
+                    event_callback=callback,
+                )
+                result_container["response"] = res
+            except Exception as e:
+                result_container["error"] = str(e)
+            finally:
+                event_q.put(None)  # Sentinel to end stream
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+
+        # Yield SSE events as they arrive
+        while True:
+            try:
+                item = event_q.get(timeout=60.0)
+                if item is None:
+                    break
+
+                payload = json.dumps(item, default=str)
+                yield f"data: {payload}\n\n"
+            except queue.Empty:
+                # Keep-alive heartbeat
+                yield f": ping\n\n"
+
+        thread.join(timeout=5.0)
+
+        if "error" in result_container:
+            err_payload = json.dumps({"event": "error", "data": {"message": result_container["error"]}})
+            yield f"data: {err_payload}\n\n"
+        elif "response" in result_container:
+            res: ResearchResponse = result_container["response"]
+            res_payload = json.dumps({"event": "complete", "data": res.model_dump()}, default=str)
+            yield f"data: {res_payload}\n\n"

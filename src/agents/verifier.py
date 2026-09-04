@@ -51,6 +51,9 @@ class VerifierAgent(BaseAgent):
             f"[Verifier] Evaluating research sufficiency (Iteration {iteration}/{max_iterations})..."
         )
 
+        if self.mock_mode:
+            return self._mock_verification(iteration, max_iterations)
+
         # Baseline heuristic checks
         if not evidence or len(sources) < 2:
             logger.info("[Verifier] Insufficient evidence count or source diversity. Flagging for more research.")
@@ -68,9 +71,6 @@ class VerifierAgent(BaseAgent):
                     )
                 ],
             )
-
-        if self.mock_mode or not self.client:
-            return self._mock_verification(iteration, max_iterations)
 
         # Build context for LLM verification
         sources_summary = "\n".join(
@@ -98,13 +98,13 @@ class VerifierAgent(BaseAgent):
                 schema=VerificationResult,
                 temperature=0.1,
             )
-            # Safeguard: if reached max_iterations, we force is_sufficient=True so workflow can finalize report
+            # Safeguard: if reached max_iterations, force completion
             if iteration >= max_iterations and not result.is_sufficient:
                 logger.info(
                     f"[Verifier] Max iterations ({max_iterations}) reached. Overriding is_sufficient to True for report synthesis."
                 )
                 result.is_sufficient = True
-                result.reason += " (Forced completion due to reaching maximum configured research iterations)."
+                result.reason += " (Reached maximum configured research iterations limit)."
 
             logger.info(
                 f"[Verifier] Decision: is_sufficient={result.is_sufficient}, confidence={result.confidence:.2f}, reason: {result.reason[:80]}..."
@@ -112,12 +112,11 @@ class VerifierAgent(BaseAgent):
             return result
 
         except Exception as e:
-            logger.warning(f"[Verifier] Error during structured verification: {e}. Using deterministic evaluation.")
-            return self._mock_verification(iteration, max_iterations)
+            logger.error(f"[Verifier] Real verification failed: {e}")
+            raise RuntimeError(f"Verifier Agent failed: {str(e)}")
 
     def _mock_verification(self, iteration: int, max_iterations: int) -> VerificationResult:
-        """Deterministic verification fallback."""
-        # On iteration 1, demonstrate verification loop if iterations allow, otherwise complete
+        """Deterministic verification fallback for offline testing."""
         if iteration == 1 and max_iterations > 1:
             return VerificationResult(
                 is_sufficient=False,

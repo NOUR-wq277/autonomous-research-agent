@@ -24,6 +24,14 @@ class ReportSection(BaseModel):
     citations: List[str] = Field(default_factory=list, description="List of citation tags used, e.g. ['[1]', '[2]'].")
 
 
+class EntityInfo(BaseModel):
+    """Organization or enterprise identified in research."""
+
+    name: str = Field(..., description="Entity or company name.")
+    role: str = Field(default="", description="Role and strategic focus in the ecosystem.")
+    details: str = Field(default="", description="Key initiatives, technologies, or details.")
+
+
 class FinalReport(BaseModel):
     """The complete structured research report."""
 
@@ -32,7 +40,7 @@ class FinalReport(BaseModel):
     research_objective: str = Field(..., description="The core research mandate.")
     key_findings: List[str] = Field(..., description="Major strategic and factual takeaways.")
     sections: List[ReportSection] = Field(..., description="Body sections covering detailed analysis.")
-    companies_entities: List[Dict[str, Any]] = Field(
+    companies_entities: List[EntityInfo] = Field(
         default_factory=list, description="Entities, companies, or organizations identified."
     )
     technologies: List[str] = Field(default_factory=list, description="Key technologies and tools discussed.")

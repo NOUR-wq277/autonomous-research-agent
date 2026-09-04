@@ -20,7 +20,7 @@ Guidelines:
    - Core technologies, infrastructure, and automation frameworks
    - Strategic business opportunities, ROI drivers, and market gaps
    - Structural challenges, regulatory bottlenecks, and operational risks
-4. Return ONLY valid structured output conforming strictly to the requested schema.
+4. Return strictly valid structured output conforming to the required schema.
 """
 
 
@@ -39,7 +39,7 @@ class PlannerAgent(BaseAgent):
         """Generate a structured research plan for the provided research question."""
         logger.info(f"[Planner] Generating research plan for: '{question}'")
 
-        if self.mock_mode or not self.client:
+        if self.mock_mode:
             return self._mock_plan(question)
 
         prompt = (
@@ -59,11 +59,11 @@ class PlannerAgent(BaseAgent):
             )
             return plan
         except Exception as e:
-            logger.warning(f"[Planner] Error during structured planning: {e}. Using deterministic plan generator.")
-            return self._mock_plan(question)
+            logger.error(f"[Planner] Real research planning failed: {e}")
+            raise RuntimeError(f"Planner Agent failed: {str(e)}")
 
     def _mock_plan(self, question: str) -> ResearchPlan:
-        """Deterministic plan fallback for testing or recovery."""
+        """Deterministic plan fallback for offline testing."""
         return ResearchPlan(
             research_objective=f"Comprehensive strategic and market analysis of: {question}",
             target_domains=[

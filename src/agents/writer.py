@@ -17,7 +17,7 @@ Standards:
 1. Ground every substantive statement in the provided evidence.
 2. Embed numerical citations corresponding to the source list (e.g., [1], [2]).
 3. Use precise, executive-grade business and engineering prose.
-4. Structure the report logically with clear headings, bullets, and tables where appropriate.
+4. Structure the report logically with clear headings, bullets, and markdown tables.
 5. Provide actionable strategic recommendations and transparently acknowledge limitations.
 """
 
@@ -44,18 +44,17 @@ class WriterAgent(BaseAgent):
         """Synthesize all research outputs into a structured FinalReport."""
         logger.info(f"[Writer] Generating final research report for: '{question}'...")
 
-        # Build citations mapping
         source_map = {s.id: idx + 1 for idx, s in enumerate(sources)}
 
-        if self.mock_mode or not self.client:
+        if self.mock_mode:
             return self._mock_report(question, plan, sources, analysis)
 
         # Build context for report generation
         sources_text = "\n".join(
-            [f"[{idx+1}] {s.title} | {s.url or 'N/A'} | Type: {s.source_type}" for idx, s in enumerate(sources)]
+            [f"[{idx+1}] {s.title} | {s.url or 'Grounded Discovery'} | Domain: {s.domain}" for idx, s in enumerate(sources)]
         )
         evidence_text = "\n".join(
-            [f"- [Source [{source_map.get(e.source_id, 1)}]] {e.claim}" for e in evidence[:30]]
+            [f"- [Source [{source_map.get(e.source_id, 1)}]] {e.claim}" for e in evidence[:35]]
         )
 
         prompt = (
@@ -87,8 +86,8 @@ class WriterAgent(BaseAgent):
             return report
 
         except Exception as e:
-            logger.warning(f"[Writer] Structured report generation failed: {e}. Assembling deterministic report.")
-            return self._mock_report(question, plan, sources, analysis)
+            logger.error(f"[Writer] Real report generation failed: {e}")
+            raise RuntimeError(f"Writer Agent failed: {str(e)}")
 
     def _render_markdown_report(self, report: FinalReport) -> str:
         """Render the complete report into GitHub-flavored markdown."""
@@ -117,9 +116,9 @@ class WriterAgent(BaseAgent):
             md.append("| Organization / Entity | Role & Strategic Focus | Details |")
             md.append("| :--- | :--- | :--- |")
             for org in report.companies_entities:
-                name = org.get("name", "N/A")
-                role = org.get("role", "N/A")
-                details = org.get("details", org.get("summary", "N/A"))
+                name = getattr(org, "name", None) or (org.get("name") if isinstance(org, dict) else "N/A")
+                role = getattr(org, "role", None) or (org.get("role") if isinstance(org, dict) else "N/A")
+                details = getattr(org, "details", None) or (org.get("details") if isinstance(org, dict) else "N/A")
                 md.append(f"| **{name}** | {role} | {details} |")
             md.append("")
 
@@ -173,7 +172,7 @@ class WriterAgent(BaseAgent):
         sources: List[SourceMetadata],
         analysis: Dict[str, Any],
     ) -> FinalReport:
-        """Deterministic fallback report generation."""
+        """Deterministic fallback report generation for offline testing."""
         title = f"Strategic Intelligence Report: {question}"
         exec_summary = (
             f"This autonomous research investigation evaluates '{question}'. "
